@@ -141,6 +141,15 @@ and deploy and new version of you app and sit back and wait while things self-he
 Take care that the processing is eventually consistent, because your method will be retried from the start every time
 a `durability=JOURNAL` message is redelivered.
 
+```
+public class MyService {
+    @DistributedAsync(durability = Durability.JOURNAL)
+    public void processSomeImportantMessageThatCantBeLost(MyImportantMessage message) {
+        ...
+    }
+}
+```
+
 ## Backoff and retry
 
 Sometimes you may want to retry a message at a later time, for example if you're waiting on another system to complete
@@ -188,21 +197,23 @@ App mantras.
 Deploy 1..n containers to act as the workers which processes message and performs the actual work. This pool of workers
 could for example be an ECS Fargate service that auto-scales based on the current queue depth.
 
-See application-worker.properties for how to configure these instances. 
+See `src/main/resources/application.properties` (base config) and `src/main/resources/application-worker.properties` 
+(specific overrides for workers). 
 
 ## Scheduler
 Deploy 1 container to act as the scheduler. There should only be 1 scheduler container running at a time or you'd 
 get duplicated processing of @DistributedScheduled annotations. This container will not actually process any message, 
 it'll only send out messages at the right times. So it will be mostly idle and will use very little memory/cpu. 
 
-See application-scheduler.properties for how to configure this instance
+See `src/main/resources/application.properties` (base config) and `src/main/resources/application-scheduler.properties`
+(specific overrides for the scheduler).
 
 ## Web or app servers
 
 These are your regular app servers, they should use the same Docker image or Springboot jar as the workers and scheduler,
 to ensure that all the class names, method names and message definitions are the same. 
 
-See application.properties for how to configure these.
+See `src/main/resources/application.properties` for how to configure these.
 
 ## SQS Queue
 
