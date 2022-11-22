@@ -1,0 +1,52 @@
+version: '3'
+services:
+  localstack:
+      image: localstack/localstack:1.0.3
+      hostname: localstack
+      restart: unless-stopped
+      ports:
+        - '4566:4566'
+        - '4571:4571'
+        - '8082:8080'
+      environment:
+        - SERVICES=s3,sqs
+
+  localstack-seed:
+    image: mesosphere/aws-cli
+    environment:
+      - AWS_ACCESS_KEY_ID=ABC123
+      - AWS_SECRET_ACCESS_KEY=abc123456789
+      - AWS_DEFAULT_REGION=eu-west-1
+    entrypoint: /bin/sh -c
+    # Usage with curl instead of nc
+    # until curl --output /dev/null --silent --head --fail http://localstack:4566
+    command: >
+      "
+        set -x
+        echo 'Waiting for localstack to come up';
+
+        until nc -z localstack 4566; do
+            echo 'Localstack is not up yet';
+            sleep 5;
+        done;
+
+        sleep 5
+
+        echo '# Setting up SQS queues';
+        aws --endpoint-url=http://localstack:4566 sqs create-queue --queue-name myapp-distributed-default
+        aws --endpoint-url=http://localstack:4566 sqs create-queue --queue-name myapp-distributed-default-deadletter
+        aws --endpoint-url=http://localstack:4566 sqs create-queue --queue-name myapp-distributed-default-unittest
+        aws --endpoint-url=http://localstack:4566 sqs create-queue --queue-name myapp-distributed-default-unittest-deadletter
+      
+        aws --endpoint-url=http://localstack:4566 sqs set-queue-attributes --queue-url http://localhost:4566/000000000000/myapp-distributed-default --attributes '{\"ReceiveMessageWaitTimeSeconds\":\"20\",\"VisibilityTimeout\":\"900\"}'
+        aws --endpoint-url=http://localstack:4566 sqs set-queue-attributes --queue-url http://localhost:4566/000000000000/myapp-distributed-default-deadletter --attributes '{\"ReceiveMessageWaitTimeSeconds\":\"20\",\"VisibilityTimeout\":\"900\"}'
+        aws --endpoint-url=http://localstack:4566 sqs set-queue-attributes --queue-url http://localhost:4566/000000000000/myapp-distributed-default-unittest --attributes '{\"ReceiveMessageWaitTimeSeconds\":\"20\",\"VisibilityTimeout\":\"900\"}'
+        aws --endpoint-url=http://localstack:4566 sqs set-queue-attributes --queue-url http://localhost:4566/000000000000/myapp-distributed-default-unittest-deadletter --attributes '{\"ReceiveMessageWaitTimeSeconds\":\"20\",\"VisibilityTimeout\":\"900\"}'
+
+        aws --endpoint-url=http://localstack:4566 s3 mb s3://myapp-distributed-sqs
+
+        echo 'AWS services initialized.';
+
+      "
+    depends_on:
+      - localstack
