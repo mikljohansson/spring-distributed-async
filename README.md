@@ -20,9 +20,30 @@ This annotation works much like the Spring @Async annotation, but executes the m
 worker containers instead of on a worker thread. For more information see the Spring documentation for @Async.  
 
 ```
+public class SomePojo {
+    ...
+}
+
+public class MyMessage {
+    private int field1;
+    private String field2;
+    private SomePojo somePojo;
+
+    /**
+     * Need a default constructor for Jackson
+     */
+    public MyMessage() {}
+    
+    public MyMessage(int field1, String field2, SomePojo somePojo) {
+        this.field1 = field1;
+        this.field2 = field2;
+        this.somePojo = somePojo.
+    }
+}
+
 public class MyService {
     @DistributedAsync
-    public void processSomething(Integer amount, ArrayList<String> strings) {
+    public void processSomething(Integer amount, ArrayList<String> strings, MyMessage message) {
         ...
     }
 }
@@ -32,7 +53,11 @@ public class MyController {
     private MyService myService;
 
     public void someRestControllerMethod() {
-        myService.processSomething(15, new ArrayList(List.of("abc", "123")));
+        myService.processSomething(
+            15, 
+            new ArrayList(List.of("abc", "123")), 
+            new MyMessage(1, "2", new SomePojo())
+        );
     }
 }
 ```
@@ -62,9 +87,79 @@ Messages are Java POJO classes which are serialized to JSON using Jackson object
 
 * You can extend message classes with new attributes if you add default values for those fields
 * You can remove attributes from message classes if you put `@JsonIgnoreProperties(ignoreUnknown = true)` on the message class.
+* You can use other classes and interfaces inside your own message classes, anything that Jackson can deserialize will work.
 
-You can also send concrete object/boxed types through as messages, for example `Integer` and `ArrayList` are fine. But `int` 
-and `List` will not work, because they're not concrete object types. This is due to mysterious deserialization and reflection reasons. 
+You can also send concrete object/boxed types through as method parameters, for example `Integer` and `ArrayList` are fine. But `int` 
+and `List` will not work as method parameters, because they're not concrete object types. This is due to mysterious deserialization 
+and reflection reasons. 
+
+## Delays
+
+You can add delays to the method calls, for example to introduce jitter into your system and smooth our usage peaks.
+
+ * The maximum delay is 15 minutes (900 seconds) due to limitations in SQS
+
+```
+public class MyService {
+    /**
+     * The processing of this async call will be delayed 60 seconds.
+     */
+    @DistributedAsync(delay = "60")
+    public void processSomething(MyMessage message) {
+        ...
+    }
+
+    /**
+     * The processing of this async call will be delayed between 0 and 900 seconds at random.
+     */
+    @DistributedAsync(delay = "random")
+    public void processSomething(MyMessage message) {
+        ...
+    }
+}
+```
+
+## Durability
+
+You can control the durability of messages, for example to differentiate between messages that are ok if they're 
+lost (e.g. since they'll be retried or be eventually consisted anyways) or those that needs to be processed at least once.
+
+Messages that cause delivery errors (e.g. exceptions) will be sent to the dead-letter queue by SQS. The workers will try 
+then to reprocess dead-lettered messages in ways that are governed by the `durability` parameter. `durability=TRANSIENT` 
+messages will just be discarded from the dead-letter queue, but `durability=JOURNAL` messages will be retried forever 
+and with exponential backoff.
+
+By default all messages are `durability=TRANSIENT`. If you code your application to be self-healing and eventually 
+consistent then this makes for very easy operations indeed. Just fix the problem that caused message processing to fail
+and deploy and new version of you app and sit back and wait while things self-heals.   
+
+Take care that the processing is eventually consistent, because your method will be retried from the start every time
+a `durability=JOURNAL` message is redelivered.
+
+## Backoff and retry
+
+Sometimes you may want to retry a message at a later time, for example if you're waiting on another system to complete
+something. In these cases it's not desirable to use a Thread.sleep() and block the worker thread, because that would 
+throttle the throughput of the worker pool. Instead you can throw a `DistributedRetryException` which will cause
+the message to be redelivered at a later time, and with exponential backoff.
+
+Take care that the processing is eventually consistent, because your method will be retried from the start every time 
+the message is redelivered.
+
+```
+public class MyService {
+    @DistributedAsync
+    public void processSomething(MyMessage message) {
+        // ... start processing message
+        
+        if (!otherSystem.isIsReady(message)) {
+            throw new DistributedRetryException("Waiting for other system to complete something");
+        }
+        
+        // ... continue processing message
+    }
+}
+```
 
 # Deployment
 
