@@ -2,17 +2,21 @@
 
 This library works very similar to Spring's built-in @Async and @Scheduled annotations, but uses a pool of worker
 processes (e.g. Docker containers) to perform the actual work. This allows you to very easily offload processing 
-of some methods to an auto-scaling container cluster. 
+of method calls and scheduled tasks to an auto-scaling container cluster. 
 
  * Methods are executed when called from another Spring component or based on a schedule (time interval or cron expression).
  * You can add delays to the method calls. For example to introduce jitter into your system and smooth our usage peaks.
  * You can selectively delay and retry processing of a message by throwing a special exception, for example if you want 
    to wait for something else to complete before continuing.
  * You can forms chains of @DistributedAsync calls, for example to create ETL pipelines. Take care that each step in the  
-   chain resides in a separate Spring component, otherwise the magic AOP method interception won't work and the call will
-   just execute blockingly on the current thread instead.
+   chain resides in a separate Spring component, otherwise the magic Spring AOP method interception won't work and the call 
+   will just execute blockingly on the current thread instead.
 
 # Usage
+
+After setting up your infrastructure you can just annotate Spring components methods with @DistributedAsync or
+@DistributedScheduled and then distributed work processing will just happen, making for a very productive developer 
+workflow.
 
 ## @DistributedAsync
 
@@ -86,8 +90,8 @@ public class MyService {
 Messages are Java POJO classes which are serialized to JSON using Jackson object mapper. This means that
 
 * You can extend message classes with new attributes if you add default values for those fields
-* You can remove attributes from message classes if you put `@JsonIgnoreProperties(ignoreUnknown = true)` on the message class.
-* You can use other classes and interfaces inside your own message classes, anything that Jackson can deserialize will work.
+* You can remove attributes from message classes if you put `@JsonIgnoreProperties(ignoreUnknown = true)` on it.
+* You can use other classes and interfaces inside your own message classes, anything that Jackson can (de)serialize with a TypeId will work.
 
 You can also send concrete object/boxed types through as method parameters, for example `Integer` and `ArrayList` are fine. But `int` 
 and `List` will not work as method parameters, because they're not concrete object types. This is due to mysterious deserialization 
@@ -95,7 +99,8 @@ and reflection reasons.
 
 ## Delays
 
-You can add delays to the method calls, for example to introduce jitter into your system and smooth our usage peaks.
+You can add fixed or random delays to the method calls, for example to introduce jitter into your system and smooth 
+our usage peaks. Complex distributed system tend to like having some jitter here and there to improve robustness.
 
  * The maximum delay is 15 minutes (900 seconds) due to limitations in SQS
 
@@ -163,14 +168,27 @@ public class MyService {
 
 # Deployment
 
-You should use the same Docker image or Springboot jar to deploy the workers, scheduler and your app server. This to 
-ensures that all the class names, method names and message definitions are always the same. 
+You should use the same Docker image or Springboot jar to deploy the workers, scheduler and your app server. This 
+ensures that all the class names, method names and message definitions are always the same.
+
+You'll need
+
+* An (optionally auto-scaling) pool of worker processes/containers
+* A single scheduler process/container
+* Your regular app/rest/.. containers that sends messages to the workers
+* An SQS message queue with a dead-letter queue attached
+* A S3 bucket to spill large messages to (SQS supports a max of 256Kb messages)
+* An AWS access key and secret access key
+
+Put configuration into either .property resource files or environment variables. For example the AWS credentials 
+should not go into .properties files or source control, AWS Secrets Manager can help here. Remember the Twelve-Factor 
+App mantras.
 
 ## Workers
 Deploy 1..n containers to act as the workers which processes message and performs the actual work. This pool of workers
 could for example be an ECS Fargate service that auto-scales based on the current queue depth.
 
-See application-worker.properties for how to configure these instances.  
+See application-worker.properties for how to configure these instances. 
 
 ## Scheduler
 Deploy 1 container to act as the scheduler. There should only be 1 scheduler container running at a time or you'd 
@@ -185,3 +203,25 @@ These are your regular app servers, they should use the same Docker image or Spr
 to ensure that all the class names, method names and message definitions are the same. 
 
 See application.properties for how to configure these.
+
+## SQS Queue
+
+Create a new SQS queue, for example `myapp-distributed-default` and give it these settings
+
+* Set "visibility timeout" to longer than you expect any message to take to process, e.g. 15 minutes or whatever is good for your app
+* Set "receive message wait time" to for example 20 seconds, to avoid excessive SQS GET calls to poll for messages on the queue
+* Set "message retention period" to some time that is longer than what it takes you to discover and fix message processing issues, for example 14 days
+
+Create a new dead-letter queue with the same settings, for example `myapp-distributed-default-deadletter` and then designate 
+this as the dead-letter queue of the regular message queue. 
+
+You may also want to configure some alerting on these queues, to notify you when your app stops processing messages for 
+some reason. For example CloudWatch, Datadog or some other monitoring SaaS can do this. 
+
+## S3 bucket
+
+Create an S3 bucket where to spill large messages, for example `myapp-distributed-sqs`.
+
+## AWS credentials
+
+Create an IAM user with read and write access to the SQS queues and S3 bucket, then create a access key for this.
