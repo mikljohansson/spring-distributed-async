@@ -1,8 +1,33 @@
-# Spring Distributed Async
+# Spring-distributed-async
 
-This library works very similar to Spring's built-in @Async and @Scheduled annotations, but uses a pool of worker
-processes (e.g. Docker containers) to perform the actual work. This allows you to very easily offload processing 
-of method calls and scheduled tasks to an auto-scaling container cluster. 
+This library provides Spring annotations for distributed work queuing and scheduling. It allow you to annotate class 
+methods have them execute on an auto-scaling container cluster. This is very similar to Spring's built-in @Async and 
+@Scheduled annotations, but uses a pool of worker processes (e.g. Docker containers on a container cluster) to perform 
+the actual work. 
+
+```
+@Service
+public class MyService {
+    @Getter
+    @NoArgsConstructor
+    public static class MyMessage {
+        private String something;
+        private List<SomePojo> items;      
+    }
+    
+    @DistributedAsync
+    public void processSomething(MyMessage message) {
+        // ... method will be executed asyncronously by one of the workers
+    }
+    
+    @DistributedScheduled(cron = "0 0 8 * * *")
+    public void doSomethingEveryMorning() {
+        // ... method will be executed by one of the workers every morning
+    }
+}
+```
+
+## Features
 
  * Methods are executed when called from another Spring component or based on a schedule (time interval or cron expression).
  * You can add delays to the method calls. For example to introduce jitter into your system and smooth our usage peaks.
@@ -11,6 +36,8 @@ of method calls and scheduled tasks to an auto-scaling container cluster.
  * You can forms chains of @DistributedAsync calls, for example to create ETL pipelines. Take care that each step in the  
    chain resides in a separate Spring component, otherwise the magic Spring AOP method interception won't work and the call 
    will just execute blockingly on the current thread instead.
+ * Unit tests can configure the library to execute the calls in a blocking way on the same, making it very easy to
+   step through and debug your distributed methods or multi-stage ETL pipelines.
 
 # Usage
 
@@ -45,6 +72,7 @@ public class MyMessage {
     }
 }
 
+@Service
 public class MyService {
     @DistributedAsync
     public void processSomething(Integer amount, ArrayList<String> strings, MyMessage message) {
@@ -52,6 +80,7 @@ public class MyService {
     }
 }
 
+@Controller
 public class MyController {
     @Autowired
     private MyService myService;
@@ -72,6 +101,7 @@ This annotation works like the Spring @Scheduled annotation, but executes the me
 worker containers instead of on a worker thread. For more information see the Spring documentation for @Scheduled.
 
 ```
+@Service
 public class MyService {
     @DistributedScheduled(fixedRate = 60 * 60 * 1000, initialDelay = DistributedScheduled.INITIAL_DELAY_FIXED_RATE)
     public void doSomethingEveryHour() {
@@ -105,6 +135,7 @@ our usage peaks. Complex distributed system tend to like having some jitter here
  * The maximum delay is 15 minutes (900 seconds) due to limitations in SQS
 
 ```
+@Service
 public class MyService {
     /**
      * The processing of this async call will be delayed 60 seconds.
@@ -142,6 +173,7 @@ Take care that the processing is eventually consistent, because your method will
 a `durability=JOURNAL` message is redelivered.
 
 ```
+@Service
 public class MyService {
     @DistributedAsync(durability = Durability.JOURNAL)
     public void processSomeImportantMessageThatCantBeLost(MyImportantMessage message) {
@@ -161,6 +193,7 @@ Take care that the processing is eventually consistent, because your method will
 the message is redelivered.
 
 ```
+@Service
 public class MyService {
     @DistributedAsync
     public void processSomething(MyMessage message) {
@@ -171,6 +204,50 @@ public class MyService {
         }
         
         // ... continue processing message
+    }
+}
+```
+
+## Async pipelines
+
+You can create fan-out pipelines using chains of processing methods, for example to create ETL pipelines triggered 
+on schedule or events.
+
+```
+@Service
+public class FirstProcessor {
+    @Autowired
+    private SecondProcessor secondProcessor;
+    
+    // Trigger the ETL pipeline every hour
+    @DistributedScheduled(cron = "0 0 * * * *")
+    public void process() {
+        // Extract items or chunks of data to process
+        var extractedChunks = ...
+        for (var chunk : extractedChunks) {
+            secondProcessor.process(chunk);
+        } 
+    }
+}
+
+@Service
+public class SecondProcessor {
+    @Autowired
+    private ThirdProcessor thirdProcessor;
+    
+    @DistributedAsync
+    public void process(ExtractedChunk message) {
+        // Process the chunks
+        var transformedChunk = ...
+        thirdProcessor.process(transformedChunk); 
+    }
+}
+
+@Service
+public class ThirdProcessor {
+    @DistributedAsync
+    public void process(TransformedChunk message) {
+        // ... load into datastore 
     }
 }
 ```
