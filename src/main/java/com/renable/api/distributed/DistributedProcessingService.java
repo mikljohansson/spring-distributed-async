@@ -242,22 +242,30 @@ public class DistributedProcessingService {
         catch (Exception e) {
             // Backoff a bit so we don't busy loop trying to process poison pill messages
             Thread.sleep((int)(60 * 1000 * (0.5 + 0.5 * new Random().nextDouble())));
-            throw e;
+            throw new RuntimeException("Failed to execute deadlettered message", e);
         }
     }
 
     private void retry(DistributedAsyncMessage message, boolean deadletter, DistributedRetryException e) {
+        // Message should be retried a few times, as well as those coming off the deadletter queue should be retried
         if (message.getRetryCount() < MAX_RETRY_COUNT || deadletter) {
             message.setRetryCount(message.getRetryCount() + 1);
             LOG.info("Distributed async message will be retried again, this was delivery attempt {}. {}",
                     message.getRetryCount(), e.getMessage());
-            send(message, 10L * message.getRetryCount(), deadletter);
+            send(message, backoffWithJitter(message.getRetryCount()), deadletter);
+        }
+        else if (message.getDurability() == Durability.TRANSIENT) {
+            // Transient messages can just be discarded without deadlettering, so just ack the message without doing anything
+            LOG.warn("Transient distributed async message reached the maximum number retries ({}) and will be discarded", MAX_RETRY_COUNT, new RuntimeException(e));
         }
         else {
-            LOG.error("Distributed async message reached the maximum number retries ({}) and will be dead lettered",
-                    MAX_RETRY_COUNT, e);
-            throw e;
+            // We're processing a Durability.JOURNAL deadletter, so should error out and continue to try and retry it
+            throw new RuntimeException(String.format("Distributed async message reached the maximum number retries (%d) and will be dead lettered", MAX_RETRY_COUNT), e);
         }
+    }
+
+    private long backoffWithJitter(int retryCount) {
+        return (long) (Math.min(10L * Math.pow(2L, retryCount), maxRandomDelay) * (0.5 + 0.5 * new Random().nextDouble()));
     }
 
     private void process(DistributedAsyncMessage message) {

@@ -4,7 +4,6 @@ import com.amazon.sqs.javamessaging.SQSConnectionFactory;
 import com.fasterxml.jackson.annotation.JsonTypeInfo;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.renable.api.distributed.ThreadSafeJmsTemplate;
-import com.renable.api.distributed.annotation.DistributedRetryException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -52,7 +51,7 @@ public class JmsConfiguration {
         factory.setMessageConverter(createMessageConverter());
         factory.setConcurrency(concurrency);
         factory.setSessionAcknowledgeMode(Session.CLIENT_ACKNOWLEDGE);
-        factory.setErrorHandler(e -> { if(!(e instanceof DistributedRetryException)) { LOG.error("Failed to receive message from JMS", e); }} );
+        factory.setErrorHandler(e -> LOG.error("Failed to receive message from JMS", e));
         factory.setAutoStartup(autoStartup);
         return factory;
     }
