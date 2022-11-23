@@ -252,6 +252,22 @@ public class ThirdProcessor {
 }
 ```
 
+# Building and testing
+
+You can build a jar like so
+
+```
+./gradlew jar
+ls build/libs/spring-distributed-async-1.0.0-SNAPSHOT-plain.jar
+```
+
+And run the tests like this (or use IntelliJ to run the unit tests)
+
+```
+docker-compose up
+./gradlew test
+```
+
 # Deployment
 
 You should use the same Docker image or Springboot jar to deploy the workers, scheduler and your app server. This 
